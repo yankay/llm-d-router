@@ -36,6 +36,22 @@ Two decorators wrap any backend: `NewTracedIndex` adds OpenTelemetry spans
 (no-op when tracing is off) and `NewInstrumentedIndex` records the
 [metrics](../metrics/README.md).
 
+### Redis Pod Cleanup
+
+Redis stores each pod's request-key and encoded-field pairs in a `kvblock:pod:<podIdentifier>:entries` set. Each member is the decimal request key, a NUL byte, and the exact JSON-encoded hash field. `Add` and `Evict` maintain that set with the request-key hashes in Redis transactions. `Clear` scans the pod's set in batches, removes its fields across all tiers and groups, and leaves unrelated keys untouched. This adds a set member and a write command per indexed entry in exchange for cleanup cost that depends on the pod's entries.
+
+Databases containing request-key hashes without reverse-index sets require migration before `Clear` can remove those entries. Stop all index writers, then either flush the dedicated KV index database or backfill the reverse-index sets before starting replicas that maintain them. Do not flush a database shared with unrelated application data. Writers that do not maintain the reverse index must not run alongside writers that do.
+
+### Redis Benchmarks
+
+The package benchmarks measure `Clear` with a fixed number of target entries and a growing unrelated keyspace, as well as the `Add` write path. They use miniredis unless `KV_CACHE_BENCH_REDIS_ADDR` points to a dedicated Redis database.
+
+```bash
+go test ./pkg/kvcache/kvblock -run '^$' -bench 'BenchmarkRedis(Clear|Add)$' -benchmem -benchtime=3x -count=5
+```
+
+For real Redis, set `KV_CACHE_BENCH_REDIS_ADDR=redis://127.0.0.1:<port>`. The benchmarks flush that database during setup and cleanup; it must contain no application data. Real Redis runs also report the dataset's `used_memory` increase.
+
 ## Grouped (HMA) Entries
 
 `GroupCatalog` tracks group identity for heterogeneous-memory-aware (HMA)
